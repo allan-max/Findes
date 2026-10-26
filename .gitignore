@@ -1,0 +1,29 @@
+# Variáveis de ambiente e credenciais
+.env
+.env*.local
+.env.*
+!.env.example
+
+# Banco de dados e arquivos locais de execução
+cdes.json
+*.pdf
+*.tmp
+*.log
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyd
+.Python
+env/
+venv/
+ENV/
+build/
+dist/
+
+# IDEs e editores
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
