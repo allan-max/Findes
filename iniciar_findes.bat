@@ -15,7 +15,7 @@ if %ERRORLEVEL% NEQ 0 (
 
 echo Iniciando FINDES em segundo plano (sem janela CMD)...
 
-powershell -NoProfile -WindowStyle Hidden -Command "Start-Process python -ArgumentList 'findes.py' -WorkingDirectory '%~dp0' -WindowStyle Hidden"
+powershell -NoProfile -Command "Start-Process python -ArgumentList 'findes.py' -WorkingDirectory '%~dp0' -WindowStyle Hidden"
 
 echo.
 echo ==============================================
