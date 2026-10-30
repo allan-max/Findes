@@ -161,15 +161,38 @@ def enviar_email(dados_resumo, caminho_anexo=None, erro=False):
         part.add_header('Content-Disposition', f'attachment; filename="{filename}"')
         msg.attach(part)
     
-    try:
-        server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT)
-        server.starttls()
-        server.login(SMTP_USER, SMTP_PASSWORD)
-        server.sendmail(SMTP_USER, destinos, msg.as_string())
-        server.quit()
-        print(f"E-mail enviado com sucesso para: {', '.join(destinos)} (Com anexo: {'Sim' if caminho_anexo else 'Não'})")
-    except Exception as e:
-        print(f"Erro ao enviar e-mail: {e}")
+    # Tenta enviar várias vezes: erros 4xx do SMTP (ex.: 451 queue file write error)
+    # são temporários do servidor de e-mail e normalmente somem após alguns segundos.
+    max_tentativas = 5
+    espera_segundos = 30
+    for tentativa in range(1, max_tentativas + 1):
+        server = None
+        try:
+            server = smtplib.SMTP(SMTP_SERVER, SMTP_PORT, timeout=60)
+            server.starttls()
+            server.login(SMTP_USER, SMTP_PASSWORD)
+            server.sendmail(SMTP_USER, destinos, msg.as_string())
+            print(f"E-mail enviado com sucesso para: {', '.join(destinos)} (Com anexo: {'Sim' if caminho_anexo else 'Não'})")
+            return True
+        except Exception as e:
+            codigo = getattr(e, 'smtp_code', None)
+            if codigo is None and isinstance(e, smtplib.SMTPRecipientsRefused):
+                codigos = [c for c, _ in e.recipients.values()]
+                codigo = codigos[0] if codigos else None
+            erro_permanente = codigo is not None and 500 <= codigo < 600
+            print(f"Erro ao enviar e-mail (tentativa {tentativa}/{max_tentativas}): {e}")
+            if erro_permanente or tentativa == max_tentativas:
+                break
+            print(f"Aguardando {espera_segundos}s para tentar novamente...")
+            time.sleep(espera_segundos)
+        finally:
+            if server is not None:
+                try:
+                    server.quit()
+                except Exception:
+                    pass
+    print("FALHA DEFINITIVA ao enviar e-mail.")
+    return False
 
 
 def limpar_texto(texto):
@@ -625,28 +648,32 @@ while True:
                     print(f"SUCESSO! Arquivo salvo como: {nome_arquivo_novo}")
                     
                     # Agora que o PDF foi salvo, envia o e-mail anexando ele!
-                    enviar_email(resumo, caminho_final)
+                    email_enviado = enviar_email(resumo, caminho_final)
                     
-                    novo_registro = {
-                        "cde": cde,
-                        "objetic": item['objetic'],
-                        "inicio": item['inicio'],
-                        "termino": item['termino'],
-                        "disputa": item['disputa'],
-                        "arquivo_baixado": nome_arquivo_novo
-                    }
-                    
-                    dados_db = []
-                    if os.path.exists(db_path):
-                        with open(db_path, 'r', encoding='utf-8') as f:
-                            try:
-                                dados_db = json.load(f)
-                            except json.JSONDecodeError:
-                                pass
-                                
-                    dados_db.append(novo_registro)
-                    with open(db_path, 'w', encoding='utf-8') as f:
-                        json.dump(dados_db, f, ensure_ascii=False, indent=4)
+                    if email_enviado is False:
+                        # Não grava no cdes.json: o CDE será reprocessado (e o e-mail reenviado) no próximo ciclo
+                        print(f"O e-mail do {cde} não foi enviado. Ele NÃO será marcado como processado e será tentado novamente no próximo ciclo.")
+                    else:
+                        novo_registro = {
+                            "cde": cde,
+                            "objetic": item['objetic'],
+                            "inicio": item['inicio'],
+                            "termino": item['termino'],
+                            "disputa": item['disputa'],
+                            "arquivo_baixado": nome_arquivo_novo
+                        }
+                        
+                        dados_db = []
+                        if os.path.exists(db_path):
+                            with open(db_path, 'r', encoding='utf-8') as f:
+                                try:
+                                    dados_db = json.load(f)
+                                except json.JSONDecodeError:
+                                    pass
+                                    
+                        dados_db.append(novo_registro)
+                        with open(db_path, 'w', encoding='utf-8') as f:
+                            json.dump(dados_db, f, ensure_ascii=False, indent=4)
 
                 except Exception as e:
                     print(f"\\n--- ERRO AO PREENCHER OU BAIXAR ---")
