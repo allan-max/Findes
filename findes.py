@@ -20,7 +20,6 @@ from email.mime.multipart import MIMEMultipart
 from email.mime.base import MIMEBase
 from email import encoders
 
-# CONFIGURAÇÃO DE LOGS
 PASTA_LOGS = os.getenv("FINDES_LOGS_DIR", os.path.join(BASE_DIR, "logs"))
 ARQUIVO_LOG = os.path.join(PASTA_LOGS, "findes.txt")
 
@@ -333,70 +332,268 @@ while True:
                     arquivo_anexo.wait_for(state="visible", timeout=15000)
                     arquivo_anexo.evaluate("el => el.click()")
                     
-                    findes.wait_for_selector('#rbConsultarCertameCadastroVisitanteAnexo', state="attached", timeout=15000)
-                    
-                    if findes.locator('#rbCNPJCadastroVisitanteAnexo').count() > 0:
-                        findes.evaluate("document.getElementById('rbCNPJCadastroVisitanteAnexo').click()")
-                        time.sleep(0.5)
-                        
-                    findes.locator('#rbConsultarCertameCadastroVisitanteAnexo').scroll_into_view_if_needed()
-                    findes.evaluate("document.getElementById('rbConsultarCertameCadastroVisitanteAnexo').click()")
-                    
-                    def preencher(seletor, valor, is_select=False):
-                        try:
-                            el = findes.locator(seletor)
-                            if el.count() > 0:
-                                id_elemento = seletor.replace('#', '')
-                                if is_select:
-                                    el.select_option(value=valor, timeout=3000)
-                                    findes.evaluate(f"document.getElementById('{id_elemento}').dispatchEvent(new Event('change', {{ bubbles: true }}))")
-                                    time.sleep(0.5)
-                                else:
-                                    el.fill(valor, timeout=3000, force=True)
-                                    findes.evaluate(f"document.getElementById('{id_elemento}').value = '{valor}'")
-                                    findes.evaluate(f"document.getElementById('{id_elemento}').dispatchEvent(new Event('input', {{ bubbles: true }}))")
-                                    findes.evaluate(f"document.getElementById('{id_elemento}').dispatchEvent(new Event('change', {{ bubbles: true }}))")
-                                    el.press('Tab')
-                        except Exception:
-                            pass
+                    findes.wait_for_selector('#painelCadastroCadastroVisitanteAnexo', state="visible", timeout=15000)
+                    findes.wait_for_function("""() => {
+                        const painel = document.getElementById('painelCadastroCadastroVisitanteAnexo');
+                        const ddlPais = document.getElementById('ddlPaisCadastroVisitanteAnexo');
+                        return painel && window.getComputedStyle(painel).opacity === '1' && ddlPais && ddlPais.options.length > 1 && (typeof $ === 'undefined' || $.active === 0);
+                    }""", timeout=15000)
 
-                    def selecionar_por_texto(seletor, texto):
+                    def selecionar_radio(seletor_id):
+                        findes.evaluate("""(id) => {
+                            const rb = document.getElementById(id);
+                            if (!rb) return;
+                            rb.checked = true;
+                            if (typeof $ !== 'undefined') {
+                                const name = rb.getAttribute('name');
+                                if (name) {
+                                    $(`input[name="${name}"]`).not(rb).prop('checked', false).each(function() {
+                                        if ($.uniform) $.uniform.update(this);
+                                    });
+                                }
+                                $(rb).prop('checked', true);
+                                if ($.uniform) $.uniform.update(rb);
+                                $(rb).trigger('click').trigger('change');
+                            } else {
+                                rb.click();
+                            }
+                        }""", seletor_id.replace('#', ''))
+
+                    if findes.locator('#rbCNPJCadastroVisitanteAnexo').count() > 0:
+                        selecionar_radio('#rbCNPJCadastroVisitanteAnexo')
+                        time.sleep(0.3)
+                        findes.wait_for_function("""() => {
+                            const ddlPais = document.getElementById('ddlPaisCadastroVisitanteAnexo');
+                            return ddlPais && ddlPais.options.length > 1 && (typeof $ === 'undefined' || $.active === 0);
+                        }""", timeout=15000)
+
+                    findes.locator('#rbConsultarCertameCadastroVisitanteAnexo').scroll_into_view_if_needed()
+                    selecionar_radio('#rbConsultarCertameCadastroVisitanteAnexo')
+
+                    def preencher_texto(seletor, valor):
+                        if valor is None:
+                            return
+                        id_elemento = seletor.replace('#', '')
                         try:
-                            js = f"""
-                            var select = document.getElementById('{seletor.replace('#', '')}');
-                            if(select) {{
-                                for (var i = 0; i < select.options.length; i++) {{
-                                    if (select.options[i].text.toUpperCase().includes('{texto.upper()}')) {{
-                                        select.value = select.options[i].value;
-                                        select.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                            findes.evaluate("""([id, val]) => {
+                                const el = document.getElementById(id);
+                                if (!el) return;
+                                if (typeof $ !== 'undefined') {
+                                    const $el = $(el);
+                                    if (typeof $el.unmask === 'function') {
+                                        try { $el.unmask(); } catch (e) {}
+                                    }
+                                    $el.val(val);
+                                    $el.trigger('input').trigger('change').trigger('blur');
+                                    if (!el.value && val) {
+                                        if (typeof $el.unmask === 'function') {
+                                            try { $el.unmask(); } catch (e) {}
+                                        }
+                                        el.value = val;
+                                        $el.trigger('input').trigger('change');
+                                    }
+                                } else {
+                                    el.value = val;
+                                    el.dispatchEvent(new Event('input', { bubbles: true }));
+                                    el.dispatchEvent(new Event('change', { bubbles: true }));
+                                    el.dispatchEvent(new Event('blur', { bubbles: true }));
+                                }
+                            }""", [id_elemento, str(valor)])
+                        except Exception as e:
+                            print(f"Aviso ao preencher {seletor}: {e}")
+
+                    def selecionar_dropdown_cascata(seletor, alvo, seletor_filho=None):
+                        id_el = seletor.replace('#', '')
+                        id_filho = seletor_filho.replace('#', '') if seletor_filho else None
+
+                        findes.wait_for_function("""(id) => {
+                            const sel = document.getElementById(id);
+                            return sel && sel.options && sel.options.length > 1 && (typeof $ === 'undefined' || $.active === 0);
+                        }""", arg=id_el, timeout=15000)
+
+                        if id_filho:
+                            findes.evaluate("""(childId) => {
+                                const child = document.getElementById(childId);
+                                if (child) child.innerHTML = '<option value="0">Selecione</option>';
+                            }""", id_filho)
+
+                        valor_escolhido = findes.evaluate("""([id, target]) => {
+                            const sel = document.getElementById(id);
+                            if (!sel) return null;
+                            const norm = (s) => (s || '').toString().normalize('NFD').replace(/[\\u0300-\\u036f]/g, '').trim().toUpperCase();
+                            const targetNorm = norm(target);
+
+                            let chosenOption = null;
+                            for (let i = 0; i < sel.options.length; i++) {
+                                const opt = sel.options[i];
+                                if (opt.value === '0' || !opt.value) continue;
+                                const valNorm = norm(opt.value);
+                                const txtNorm = norm(opt.text);
+                                if (valNorm === targetNorm || txtNorm === targetNorm) {
+                                    chosenOption = opt;
+                                    break;
+                                }
+                            }
+                            if (!chosenOption) {
+                                for (let i = 0; i < sel.options.length; i++) {
+                                    const opt = sel.options[i];
+                                    if (opt.value === '0' || !opt.value) continue;
+                                    const txtNorm = norm(opt.text);
+                                    if (txtNorm.includes(targetNorm) || targetNorm.includes(txtNorm)) {
+                                        chosenOption = opt;
                                         break;
-                                    }}
-                                }}
-                            }}
-                            """
-                            findes.evaluate(js)
-                            time.sleep(0.5)
-                        except Exception:
-                            pass
-                    
-                    # Preenchendo todos os campos solicitados de texto
-                    preencher('#tbDocumentoCadastroVisitanteAnexo', CADASTRO_CNPJ)
-                    preencher('#tbRGCadastroVisitanteAnexo', CADASTRO_RG)
-                    preencher('#tbNomeCadastroVisitanteAnexo', CADASTRO_NOME)
-                    preencher('#tbEmailCadastroVisitanteAnexo', CADASTRO_EMAIL)
-                    preencher('#tbTelefoneCadastroVisitanteAnexo', CADASTRO_TELEFONE)
-                    preencher('#tbContatoCadastroVisitanteAnexo', CADASTRO_CONTATO)
-                    preencher('#tbEnderecoCadastroVisitanteAnexo', CADASTRO_ENDERECO)
-                    preencher('#tbNumeroCadastroVisitanteAnexo', CADASTRO_NUMERO)
-                    preencher('#tbComplementoCadastroVisitanteAnexo', CADASTRO_COMPLEMENTO)
-                    preencher('#tbBairroCadastroVisitanteAnexo', CADASTRO_BAIRRO)
-                    preencher('#tbCEPCadastroVisitanteAnexo', CADASTRO_CEP)
-                    
-                    # Preenchimento em cascata de País -> Estado -> Cidade
-                    preencher('#ddlPaisCadastroVisitanteAnexo', CADASTRO_PAIS_VAL, is_select=True)
-                    selecionar_por_texto('#ddlEstadoCadastroVisitanteAnexo', CADASTRO_ESTADO_NOME)
-                    selecionar_por_texto('#ddlEstadoCadastroVisitanteAnexo', unicodedata.normalize('NFKD', CADASTRO_ESTADO_NOME).encode('ASCII', 'ignore').decode('utf-8'))
-                    preencher('#ddlCidadeCadastroVisitanteAnexo', CADASTRO_CIDADE_VAL, is_select=True)
+                                    }
+                                }
+                            }
+                            if (!chosenOption) return null;
+
+                            sel.selectedIndex = chosenOption.index;
+                            sel.value = chosenOption.value;
+                            sel.classList.remove('error');
+
+                            const uniformDiv = document.getElementById('uniform-' + id);
+                            if (uniformDiv) {
+                                uniformDiv.classList.remove('error');
+                                const span = uniformDiv.querySelector('span');
+                                if (span) span.textContent = chosenOption.text;
+                            }
+
+                            if (typeof $ !== 'undefined') {
+                                const $sel = $(sel);
+                                $sel.val(chosenOption.value);
+                                if ($.uniform) {
+                                    try { $.uniform.update(sel); } catch (e) {}
+                                }
+                                $sel.trigger('change');
+                            } else {
+                                sel.dispatchEvent(new Event('change', { bubbles: true }));
+                            }
+                            return chosenOption.value;
+                        }""", [id_el, str(alvo)])
+
+                        if id_filho:
+                            findes.wait_for_function("""(childId) => {
+                                const child = document.getElementById(childId);
+                                return child && child.options && child.options.length > 1 && (typeof $ === 'undefined' || $.active === 0);
+                            }""", arg=id_filho, timeout=15000)
+                        else:
+                            findes.wait_for_function("() => typeof $ === 'undefined' || $.active === 0", timeout=10000)
+
+                        return valor_escolhido
+
+                    campos_texto_esperados = [
+                        ('#tbDocumentoCadastroVisitanteAnexo', CADASTRO_CNPJ),
+                        ('#tbRGCadastroVisitanteAnexo', CADASTRO_RG),
+                        ('#tbNomeCadastroVisitanteAnexo', CADASTRO_NOME),
+                        ('#tbEmailCadastroVisitanteAnexo', CADASTRO_EMAIL),
+                        ('#tbTelefoneCadastroVisitanteAnexo', CADASTRO_TELEFONE),
+                        ('#tbContatoCadastroVisitanteAnexo', CADASTRO_CONTATO),
+                        ('#tbEnderecoCadastroVisitanteAnexo', CADASTRO_ENDERECO),
+                        ('#tbNumeroCadastroVisitanteAnexo', CADASTRO_NUMERO),
+                        ('#tbComplementoCadastroVisitanteAnexo', CADASTRO_COMPLEMENTO),
+                        ('#tbBairroCadastroVisitanteAnexo', CADASTRO_BAIRRO),
+                        ('#tbCEPCadastroVisitanteAnexo', CADASTRO_CEP),
+                    ]
+
+                    # 1ª Passada: Preenchimento de todos os campos de texto e seletores em cascata
+                    for seletor_campo, valor_campo in campos_texto_esperados:
+                        preencher_texto(seletor_campo, valor_campo)
+
+                    selecionar_dropdown_cascata('#ddlPaisCadastroVisitanteAnexo', CADASTRO_PAIS_VAL, '#ddlEstadoCadastroVisitanteAnexo')
+                    selecionar_dropdown_cascata('#ddlEstadoCadastroVisitanteAnexo', CADASTRO_ESTADO_NOME, '#ddlCidadeCadastroVisitanteAnexo')
+                    selecionar_dropdown_cascata('#ddlCidadeCadastroVisitanteAnexo', CADASTRO_CIDADE_VAL, None)
+
+                    # Verificação completa de todos os campos (garante que nenhum campo ou seletor ficou sem preencher)
+                    for tentativa_verificacao in range(1, 4):
+                        pendencias = findes.evaluate("""(camposTexto) => {
+                            const faltando = [];
+
+                            const rbCnpj = document.getElementById('rbCNPJCadastroVisitanteAnexo');
+                            if (rbCnpj && !rbCnpj.checked) faltando.push('#rbCNPJCadastroVisitanteAnexo');
+
+                            const rbConsultar = document.getElementById('rbConsultarCertameCadastroVisitanteAnexo');
+                            if (rbConsultar && !rbConsultar.checked) faltando.push('#rbConsultarCertameCadastroVisitanteAnexo');
+
+                            for (const [seletor, esperado] of camposTexto) {
+                                if (!esperado) continue;
+                                const id = seletor.replace('#', '');
+                                const el = document.getElementById(id);
+                                if (!el) continue;
+                                const visivel = typeof $ !== 'undefined' ? $(el).is(':visible') : (el.offsetParent !== null);
+                                if (visivel && (!el.value || el.value.trim() === '' || el.value === '__.___.___/____-__' || el.value === '___.___.___-__' || el.value === '__.___-___')) {
+                                    faltando.push(seletor);
+                                }
+                            }
+
+                            const checarSelect = (id) => {
+                                const sel = document.getElementById(id);
+                                const uniformSpan = document.querySelector(`#uniform-${id} span`);
+                                if (!sel || !sel.value || sel.value === '0') return false;
+                                if (uniformSpan && uniformSpan.textContent.trim().toUpperCase() === 'SELECIONE') return false;
+                                return true;
+                            };
+
+                            if (!checarSelect('ddlPaisCadastroVisitanteAnexo')) faltando.push('#ddlPaisCadastroVisitanteAnexo');
+                            if (!checarSelect('ddlEstadoCadastroVisitanteAnexo')) faltando.push('#ddlEstadoCadastroVisitanteAnexo');
+                            if (!checarSelect('ddlCidadeCadastroVisitanteAnexo')) faltando.push('#ddlCidadeCadastroVisitanteAnexo');
+
+                            const divLgpd = document.getElementById('divConsentimentoLgpdCadastroVisitanteAnexo');
+                            const cbLgpd = document.getElementById('cbConsentimentoLgpdCadastroVisitanteAnexo');
+                            if (divLgpd && cbLgpd && (typeof $ !== 'undefined' ? $(divLgpd).is(':visible') : divLgpd.offsetParent !== null) && !cbLgpd.checked) {
+                                faltando.push('#cbConsentimentoLgpdCadastroVisitanteAnexo');
+                            }
+
+                            return faltando;
+                        }""", campos_texto_esperados)
+
+                        if not pendencias:
+                            print(f"Verificação de campos concluída (tentativa {tentativa_verificacao}): todos os campos e seletores preenchidos corretamente.")
+                            break
+
+                        print(f"Re-preenchendo campos pendentes na tentativa {tentativa_verificacao}: {pendencias}")
+                        if '#rbCNPJCadastroVisitanteAnexo' in pendencias:
+                            selecionar_radio('#rbCNPJCadastroVisitanteAnexo')
+                            time.sleep(0.3)
+                            findes.wait_for_function("""() => {
+                                const ddlPais = document.getElementById('ddlPaisCadastroVisitanteAnexo');
+                                return ddlPais && ddlPais.options.length > 1 && (typeof $ === 'undefined' || $.active === 0);
+                            }""", timeout=15000)
+
+                        if '#rbConsultarCertameCadastroVisitanteAnexo' in pendencias:
+                            selecionar_radio('#rbConsultarCertameCadastroVisitanteAnexo')
+
+                        for seletor_campo, valor_campo in campos_texto_esperados:
+                            if seletor_campo in pendencias or '#rbCNPJCadastroVisitanteAnexo' in pendencias:
+                                preencher_texto(seletor_campo, valor_campo)
+
+                        if any(s in pendencias for s in ('#ddlPaisCadastroVisitanteAnexo', '#ddlEstadoCadastroVisitanteAnexo', '#ddlCidadeCadastroVisitanteAnexo', '#rbCNPJCadastroVisitanteAnexo')):
+                            if '#ddlPaisCadastroVisitanteAnexo' in pendencias or '#rbCNPJCadastroVisitanteAnexo' in pendencias:
+                                selecionar_dropdown_cascata('#ddlPaisCadastroVisitanteAnexo', CADASTRO_PAIS_VAL, '#ddlEstadoCadastroVisitanteAnexo')
+                            if '#ddlPaisCadastroVisitanteAnexo' in pendencias or '#ddlEstadoCadastroVisitanteAnexo' in pendencias or '#rbCNPJCadastroVisitanteAnexo' in pendencias:
+                                selecionar_dropdown_cascata('#ddlEstadoCadastroVisitanteAnexo', CADASTRO_ESTADO_NOME, '#ddlCidadeCadastroVisitanteAnexo')
+                            selecionar_dropdown_cascata('#ddlCidadeCadastroVisitanteAnexo', CADASTRO_CIDADE_VAL, None)
+
+                        if '#cbConsentimentoLgpdCadastroVisitanteAnexo' in pendencias:
+                            findes.evaluate("""() => {
+                                const cb = document.getElementById('cbConsentimentoLgpdCadastroVisitanteAnexo');
+                                if (cb) {
+                                    cb.checked = true;
+                                    if (typeof $ !== 'undefined') {
+                                        $(cb).prop('checked', true);
+                                        if ($.uniform) $.uniform.update(cb);
+                                    }
+                                }
+                            }""")
+
+                    # Garante que o botão de confirmar esteja habilitado e valida o formulário antes do clique
+                    findes.evaluate("""() => {
+                        if (typeof $ !== 'undefined') {
+                            $('#btCadastroVisitanteConfirmarCadastroVisitanteAnexo').removeClass('desativado');
+                            if (typeof objParametroCadastroVisitanteAnexo !== 'undefined' && objParametroCadastroVisitanteAnexo.nIdFormularioValidacao) {
+                                try { $('#' + objParametroCadastroVisitanteAnexo.nIdFormularioValidacao).valid(); } catch (e) {}
+                            }
+                        }
+                    }""")
                     
                     pasta_destino = PASTA_DOWNLOAD
                     os.makedirs(pasta_destino, exist_ok=True)
